@@ -82,15 +82,12 @@ export default function VideoConverter() {
         files: [videoFile]
       }, mountPoint);
 
-      const args = [
-        '-i',
-        `${mountPoint}/${inputName}`,
-      ];
+      const args: string[] = [];
       
       if (startTime) args.push('-ss', startTime);
       if (endTime) args.push('-to', endTime);
       
-      args.push('-c', 'copy', outputName);
+      args.push('-i', `${mountPoint}/${inputName}`, '-c', 'copy', outputName);
       
       await ffmpeg.exec(args);
 

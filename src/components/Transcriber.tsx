@@ -95,15 +95,12 @@ export default function Transcriber() {
         files: [file]
       }, mountPoint);
       
-      const args = [
-        '-i',
-        `${mountPoint}/${inputName}`,
-      ];
+      const args: string[] = [];
       
       if (startTime) args.push('-ss', startTime);
       if (endTime) args.push('-to', endTime);
       
-      args.push('-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', outputName);
+      args.push('-i', `${mountPoint}/${inputName}`, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', outputName);
       
       await ffmpeg.exec(args);
       
