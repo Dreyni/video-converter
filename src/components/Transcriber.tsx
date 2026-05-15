@@ -136,6 +136,9 @@ export default function Transcriber() {
     try {
       const inputName = file.name;
       const outputName = 'output.wav';
+      const fileBytes = new Uint8Array(await file.arrayBuffer());
+      let inputPath = `${mountPoint}/${inputName}`;
+      let usingMountedInput = true;
 
       if (!activeJobId) {
         const job = await createJob({
@@ -154,11 +157,21 @@ export default function Transcriber() {
 
       try { await ffmpeg.unmount(mountPoint); } catch (e) {}
 
-      await ffmpeg.mount('WORKERFS' as any, { files: [file] }, mountPoint);
+      try {
+        await ffmpeg.mount('WORKERFS' as any, { files: [file] }, mountPoint);
+        inputPath = `${mountPoint}/${inputName}`;
+        usingMountedInput = true;
+      } catch (mountError) {
+        console.warn('WORKERFS mount failed, falling back to in-memory input:', mountError);
+        setDebugLog(`WORKERFS mount failed, falling back to in-memory input: ${String(mountError)}`);
+        await ffmpeg.writeFile(inputName, fileBytes);
+        inputPath = inputName;
+        usingMountedInput = false;
+      }
       
       await ffmpeg.exec([
         '-i',
-        `${mountPoint}/${inputName}`,
+        inputPath,
         '-ar', '16000', 
         '-ac', '1', 
         '-c:a', 'pcm_s16le', 
@@ -172,6 +185,9 @@ export default function Transcriber() {
       const audioURL = URL.createObjectURL(audioBlob);
 
       await ffmpeg.deleteFile(outputName);
+      if (!usingMountedInput) {
+        try { await ffmpeg.deleteFile(inputName); } catch (e) {}
+      }
       try { await ffmpeg.unmount(mountPoint); } catch (e) {}
 
       workerRef.current.postMessage({ 
