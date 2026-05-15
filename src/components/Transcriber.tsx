@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { createFFmpeg } from '@ffmpeg/ffmpeg';
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { toBlobURL } from '@ffmpeg/util';
 import { FileAudio, Loader2, Download, Languages, AlertCircle, Copy, Check, FileText, File as FileIcon, ChevronDown, Cpu, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { jsPDF } from 'jspdf';
@@ -14,7 +15,7 @@ export default function Transcriber() {
   const [copied, setCopied] = useState(false);
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [ffmpeg, setFfmpeg] = useState<any>(null);
+  const ffmpegRef = useRef<FFmpeg | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -23,12 +24,19 @@ export default function Transcriber() {
   useEffect(() => {
     const loadEngines = async () => {
       try {
-        const ffmpegInstance = createFFmpeg({
-          log: true,
-          corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
+        const ffmpeg = new FFmpeg();
+        ffmpeg.on('progress', ({ progress: ratio }) => {
+          setProgress(Math.round(ratio * 100));
         });
-        await ffmpegInstance.load();
-        setFfmpeg(ffmpegInstance);
+
+        const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.10/dist/umd';
+        await ffmpeg.load({
+          coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+          wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+          workerURL: await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, 'text/javascript'),
+        });
+
+        ffmpegRef.current = ffmpeg;
       } catch (err) {
         console.error('FFmpeg load error:', err);
       }
@@ -54,6 +62,7 @@ export default function Transcriber() {
 
     return () => {
       workerRef.current?.terminate();
+      ffmpegRef.current?.terminate();
     };
   }, []);
 
@@ -67,42 +76,41 @@ export default function Transcriber() {
   };
 
   const startTranscription = async () => {
+    const ffmpeg = ffmpegRef.current;
     if (!file || !ffmpeg || !workerRef.current) return;
 
     setStatus('processing');
     setProgress(0);
     
+    const mountPoint = '/input';
     try {
-      // 1. Pro Audio Extraction: Mount the 4GB file to disk
       const inputName = file.name;
       const outputName = 'output.wav';
 
-      try { ffmpeg.FS('unmount', '/mnt'); } catch (e) {}
-      try { ffmpeg.FS('mkdir', '/mnt'); } catch (e) {}
-      
-      ffmpeg.FS('mount', (window as any).WorkerFS, {
+      try { await ffmpeg.unmount(mountPoint); } catch (e) {}
+
+      await ffmpeg.mount('WORKERFS' as any, {
         files: [file]
-      }, '/mnt');
+      }, mountPoint);
       
-      // Extract audio: 16kHz, mono, WAV (required for Whisper)
-      // This reads directly from disk, saving GBs of RAM
-      await ffmpeg.run(
-        '-i', `/mnt/${inputName}`, 
+      await ffmpeg.exec([
+        '-i',
+        `${mountPoint}/${inputName}`,
         '-ar', '16000', 
         '-ac', '1', 
         '-c:a', 'pcm_s16le', 
-        outputName
-      );
+        outputName,
+      ]);
       
-      const data = ffmpeg.FS('readFile', outputName);
-      const audioBlob = new Blob([data.buffer], { type: 'audio/wav' });
+      const data = await ffmpeg.readFile(outputName);
+      const bytes = data instanceof Uint8Array ? data : new TextEncoder().encode(data);
+      const outputBuffer = (bytes.buffer as ArrayBuffer).slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      const audioBlob = new Blob([outputBuffer], { type: 'audio/wav' });
       const audioURL = URL.createObjectURL(audioBlob);
 
-      // Cleanup
-      ffmpeg.FS('unlink', outputName);
-      ffmpeg.FS('unmount', '/mnt');
+      await ffmpeg.deleteFile(outputName);
+      try { await ffmpeg.unmount(mountPoint); } catch (e) {}
 
-      // 2. Send to Worker for AI processing
       workerRef.current.postMessage({ 
         audioURL, 
         modelName: 'Xenova/whisper-tiny.en' 
@@ -112,6 +120,7 @@ export default function Transcriber() {
       console.error('Transcription error:', err);
       setErrorMessage('Audio extraction failed. Try a smaller file or a different format.');
       setStatus('error');
+      try { await ffmpeg.unmount(mountPoint); } catch (e) {}
     }
   };
 

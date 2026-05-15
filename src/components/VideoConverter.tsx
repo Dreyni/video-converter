@@ -1,12 +1,13 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { createFFmpeg, fetchFile } from '@ffmpeg/ffmpeg';
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { toBlobURL } from '@ffmpeg/util';
 import { Upload, FileVideo, CheckCircle2, Loader2, Download, AlertCircle, RefreshCcw, Info, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function VideoConverter() {
-  const [ffmpeg, setFfmpeg] = useState<any>(null);
+  const ffmpegRef = useRef<FFmpeg | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'converting' | 'done' | 'error'>('idle');
@@ -18,29 +19,36 @@ export default function VideoConverter() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    const loadFFmpeg = async () => {
+      try {
+        const ffmpeg = new FFmpeg();
+        ffmpeg.on('progress', ({ progress: ratio }) => {
+          setProgress(Math.round(ratio * 100));
+        });
+
+        const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.10/dist/umd';
+        await ffmpeg.load({
+          coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+          wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+          workerURL: await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, 'text/javascript'),
+        });
+
+        ffmpegRef.current = ffmpeg;
+        setLoaded(true);
+      } catch (err) {
+        console.error('Failed to load FFmpeg:', err);
+        setStatus('error');
+        setErrorMessage('Failed to load video engine. Please refresh.');
+      }
+    };
+
     loadFFmpeg();
+
+    return () => {
+      ffmpegRef.current?.terminate();
+      ffmpegRef.current = null;
+    };
   }, []);
-
-  const loadFFmpeg = async () => {
-    try {
-      const ffmpegInstance = createFFmpeg({
-        log: true,
-        corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
-      });
-      
-      ffmpegInstance.setProgress(({ ratio }) => {
-        setProgress(Math.round(ratio * 100));
-      });
-
-      await ffmpegInstance.load();
-      setFfmpeg(ffmpegInstance);
-      setLoaded(true);
-    } catch (err) {
-      console.error('Failed to load FFmpeg:', err);
-      setStatus('error');
-      setErrorMessage('Failed to load video engine. Please refresh.');
-    }
-  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -53,48 +61,46 @@ export default function VideoConverter() {
   };
 
   const convertVideo = async () => {
+    const ffmpeg = ffmpegRef.current;
     if (!ffmpeg || !videoFile) return;
 
     setStatus('converting');
     setProgress(0);
 
+    const mountPoint = '/input';
     try {
-      // 1. Memory-Efficient Loading: Using WORKERFS for 4GB files
-      // This mounts the file directly from disk without copying it to RAM
       const inputName = videoFile.name;
       const outputName = `output.${outputFormat}`;
 
-      // Clear existing FS data if any
-      try { ffmpeg.FS('unmount', '/mnt'); } catch (e) {}
-      try { ffmpeg.FS('mkdir', '/mnt'); } catch (e) {}
-      
-      ffmpeg.FS('mount', (window as any).WorkerFS, {
+      try { await ffmpeg.unmount(mountPoint); } catch (e) {}
+
+      await ffmpeg.mount('WORKERFS' as any, {
         files: [videoFile]
-      }, '/mnt');
+      }, mountPoint);
 
-      // 2. Perform the conversion
-      // We use '-c copy' to be lightning fast and avoid OOM for 4GB files
-      await ffmpeg.run(
-        '-i', `/mnt/${inputName}`, 
+      await ffmpeg.exec([
+        '-i',
+        `${mountPoint}/${inputName}`,
         '-c', 'copy', 
-        outputName
-      );
+        outputName,
+      ]);
 
-      // 3. Read the output
-      const data = ffmpeg.FS('readFile', outputName);
-      const url = URL.createObjectURL(new Blob([data.buffer], { type: `video/${outputFormat}` }));
+      const data = await ffmpeg.readFile(outputName);
+      const bytes = data instanceof Uint8Array ? data : new TextEncoder().encode(data);
+      const outputBuffer = (bytes.buffer as ArrayBuffer).slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      const url = URL.createObjectURL(new Blob([outputBuffer], { type: `video/${outputFormat}` }));
       
       setOutputUrl(url);
       setStatus('done');
 
-      // Cleanup
-      ffmpeg.FS('unlink', outputName);
-      ffmpeg.FS('unmount', '/mnt');
+      await ffmpeg.deleteFile(outputName);
       
     } catch (err: any) {
       console.error('Conversion error:', err);
       setStatus('error');
-      setErrorMessage('Conversion failed. For 4GB files, ensure you have enough disk space and are using a desktop browser.');
+      setErrorMessage('Conversion failed. Large files require a browser with SharedArrayBuffer support and enough memory for the output file.');
+    } finally {
+      try { await ffmpeg.unmount(mountPoint); } catch (e) {}
     }
   };
 

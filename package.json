@@ -9,8 +9,10 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@ffmpeg/core": "^0.11.0",
-    "@ffmpeg/ffmpeg": "^0.11.6",
+    "@ffmpeg/core": "^0.12.10",
+    "@ffmpeg/core-mt": "^0.12.10",
+    "@ffmpeg/ffmpeg": "^0.12.10",
+    "@ffmpeg/util": "^0.12.1",
     "@xenova/transformers": "^2.17.2",
     "clsx": "^2.1.1",
     "docx": "^9.6.1",
