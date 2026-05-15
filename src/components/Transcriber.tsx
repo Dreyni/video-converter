@@ -327,10 +327,10 @@ export default function Transcriber() {
     <div className="card" style={{ maxWidth: '900px', margin: '2rem auto' }}>
       <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
         <h1 className="gradient-text" style={{ fontSize: '2.5rem', fontWeight: 800, marginBottom: '0.75rem' }}>
-          Transcribe Your Audio
+          Convert Audio to Text
         </h1>
         <p style={{ color: '#cbd5e1', fontSize: '1.1rem', marginBottom: '0.5rem' }}>
-          Convert videos and audio files to text instantly—completely private, runs in your browser
+          Fast transcription powered by AI. Upload videos or audio files up to 2GB, get instant transcripts. Results are saved to your account.
         </p>
         {backendMessage && (
           <p style={{ marginTop: '0.75rem', color: '#10b981', fontSize: '0.95rem', background: 'rgba(16, 185, 129, 0.1)', padding: '0.5rem 1rem', borderRadius: '8px', display: 'inline-block' }}>
@@ -351,7 +351,7 @@ export default function Transcriber() {
         }}>
           <Zap size={20} color="var(--secondary)" />
           <p style={{ fontSize: '0.9rem', color: '#e2e8f0' }}>
-            <strong>Direct Disk Mounting:</strong> Extracting audio from 4GB+ files without crashing your browser.
+            <strong>Supported:</strong> Videos and audio files up to 2GB • Works in your browser • Results saved securely
           </p>
         </div>
 
@@ -381,7 +381,7 @@ export default function Transcriber() {
               <div>
                 <p style={{ fontWeight: 600 }}>{file.name}</p>
                 <p style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-                  {(file.size / (1024 * 1024 * 1024)).toFixed(2)} GB
+                  {(file.size / (1024 * 1024)).toFixed(2)} MB
                 </p>
               </div>
             </div>
@@ -390,15 +390,23 @@ export default function Transcriber() {
               <div style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '1.5rem', borderRadius: '50%' }}>
                 <Languages size={32} color="#94a3b8" />
               </div>
-              <p style={{ fontWeight: 500 }}>Upload large video or audio</p>
+              <div>
+                <p style={{ fontWeight: 500, marginBottom: '0.25rem' }}>Click to upload or drag and drop</p>
+                <p style={{ fontSize: '0.85rem', color: '#94a3b8' }}>MP4, MOV, WAV, MP3 • Max 2GB</p>
+              </div>
             </div>
           )}
         </div>
 
         {file && status === 'idle' && (
-          <button onClick={startTranscription} className="btn btn-primary" style={{ alignSelf: 'center' }}>
-            Transcribe
-          </button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <button onClick={startTranscription} className="btn btn-primary" style={{ alignSelf: 'center', width: '100%', maxWidth: '300px' }}>
+              Start Transcription
+            </button>
+            <p style={{ fontSize: '0.85rem', color: '#94a3b8', textAlign: 'center' }}>
+              Your file will be processed in the browser and saved to your account history.
+            </p>
+          </div>
         )}
 
         {(status === 'loading' || status === 'processing') && (
