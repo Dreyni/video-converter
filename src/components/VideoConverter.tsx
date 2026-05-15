@@ -98,7 +98,7 @@ export default function VideoConverter() {
     setErrorMessage('');
     setDebugLog('');
 
-    const mountPoint = '/';
+    const mountPoint = '/input';
     const inputName = videoFile.name;
     const outputName = `output.${outputFormat}`;
     let activeJobId = jobId;
@@ -130,7 +130,7 @@ export default function VideoConverter() {
 
       // Simple FFmpeg command - just copy streams
       await ffmpeg.exec([
-        '-i', `/${inputName}`,
+        '-i', `${mountPoint}/${inputName}`,
         '-c', 'copy',
         outputName
       ]);

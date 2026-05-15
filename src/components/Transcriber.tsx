@@ -132,7 +132,7 @@ export default function Transcriber() {
     setDebugLog('');
     let activeJobId = jobId;
     
-    const mountPoint = '/';
+    const mountPoint = '/input';
     try {
       const inputName = file.name;
       const outputName = 'output.wav';
@@ -158,7 +158,7 @@ export default function Transcriber() {
       
       await ffmpeg.exec([
         '-i',
-        `/${inputName}`,
+        `${mountPoint}/${inputName}`,
         '-ar', '16000', 
         '-ac', '1', 
         '-c:a', 'pcm_s16le', 
