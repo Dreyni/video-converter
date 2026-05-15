@@ -17,8 +17,6 @@ export default function Transcriber() {
   const [progress, setProgress] = useState(0);
   const ffmpegRef = useRef<FFmpeg | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
-  const [startTime, setStartTime] = useState('');
-  const [endTime, setEndTime] = useState('');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -73,8 +71,8 @@ export default function Transcriber() {
     if (selectedFile) {
       setFile(selectedFile);
       setStatus('idle');
-      setTranscript('');      setStartTime('');
-      setEndTime('');    }
+      setTranscript('');
+    }
   };
 
   const startTranscription = async () => {
@@ -91,39 +89,16 @@ export default function Transcriber() {
 
       try { await ffmpeg.unmount(mountPoint); } catch (e) {}
 
-      await ffmpeg.mount('WORKERFS' as any, {
-        files: [file]
-      }, mountPoint);
+      await ffmpeg.mount('WORKERFS' as any, { files: [file] }, mountPoint);
       
-      const args: string[] = [];
-      
-      // Handle trim with -ss and -t (more reliable than -to)
-      if (startTime && startTime.match(/^\d{1,2}:\d{2}:\d{2}$/)) {
-        args.push('-ss', startTime);
-      }
-      
-      args.push('-i', `${mountPoint}/${inputName}`);
-      
-      if (endTime && endTime.match(/^\d{1,2}:\d{2}:\d{2}$/)) {
-        if (startTime && startTime.match(/^\d{1,2}:\d{2}:\d{2}$/)) {
-          // Calculate duration
-          const [sH, sM, sS] = startTime.split(':').map(Number);
-          const [eH, eM, eS] = endTime.split(':').map(Number);
-          const startSecs = sH * 3600 + sM * 60 + sS;
-          const endSecs = eH * 3600 + eM * 60 + eS;
-          const durationSecs = endSecs - startSecs;
-          if (durationSecs > 0) {
-            args.push('-t', String(durationSecs));
-          }
-        } else {
-          // No start time, use -to
-          args.push('-to', endTime);
-        }
-      }
-      
-      args.push('-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', outputName);
-      
-      await ffmpeg.exec(args);
+      await ffmpeg.exec([
+        '-i',
+        `${mountPoint}/${inputName}`,
+        '-ar', '16000', 
+        '-ac', '1', 
+        '-c:a', 'pcm_s16le', 
+        outputName,
+      ]);
       
       const data = await ffmpeg.readFile(outputName);
       const bytes = data instanceof Uint8Array ? data : new TextEncoder().encode(data);
@@ -141,7 +116,7 @@ export default function Transcriber() {
 
     } catch (err: any) {
       console.error('Transcription error:', err);
-      setErrorMessage('Audio extraction failed. Try a smaller file or a different format.');
+      setErrorMessage('Audio extraction failed: ' + (err.message || 'Unknown error'));
       setStatus('error');
       try { await ffmpeg.unmount(mountPoint); } catch (e) {}
     }
@@ -260,65 +235,9 @@ export default function Transcriber() {
         </div>
 
         {file && status === 'idle' && (
-          <motion.div 
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            style={{ display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center' }}
-          >
-            <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap', justifyContent: 'center' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <label style={{ fontSize: '0.9rem', color: '#cbd5e1' }}>Start (HH:MM:SS)</label>
-                <input 
-                  type="text" 
-                  value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
-                  placeholder="00:00:00"
-                  style={{
-                    background: 'var(--glass-bg)',
-                    border: '1px solid var(--glass-border)',
-                    color: 'white',
-                    padding: '0.5rem',
-                    borderRadius: '8px',
-                    outline: 'none',
-                    width: '120px'
-                  }}
-                />
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <label style={{ fontSize: '0.9rem', color: '#cbd5e1' }}>End (HH:MM:SS)</label>
-                <input 
-                  type="text" 
-                  value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
-                  placeholder="optional"
-                  style={{
-                    background: 'var(--glass-bg)',
-                    border: '1px solid var(--glass-border)',
-                    color: 'white',
-                    padding: '0.5rem',
-                    borderRadius: '8px',
-                    outline: 'none',
-                    width: '120px'
-                  }}
-                />
-              </div>
-            </div>
-            
-            <div style={{ display: 'flex', gap: '1rem' }}>
-              <button onClick={startTranscription} className="btn btn-primary">
-                Start Pro Transcription
-              </button>
-              {(startTime || endTime) && (
-                <button 
-                  onClick={() => { setStartTime(''); setEndTime(''); }} 
-                  className="btn btn-outline"
-                  style={{ fontSize: '0.9rem' }}
-                >
-                  Clear Trim
-                </button>
-              )}
-            </div>
-          </motion.div>
+          <button onClick={startTranscription} className="btn btn-primary" style={{ alignSelf: 'center' }}>
+            Transcribe
+          </button>
         )}
 
         {(status === 'loading' || status === 'processing') && (
