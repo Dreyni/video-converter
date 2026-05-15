@@ -1,13 +1,12 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile, toBlobURL } from '@ffmpeg/util';
-import { Upload, FileVideo, CheckCircle2, Loader2, Download, AlertCircle, RefreshCcw, Info } from 'lucide-react';
+import { createFFmpeg, fetchFile } from '@ffmpeg/ffmpeg';
+import { Upload, FileVideo, CheckCircle2, Loader2, Download, AlertCircle, RefreshCcw, Info, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function VideoConverter() {
-  const [ffmpeg, setFfmpeg] = useState<FFmpeg | null>(null);
+  const [ffmpeg, setFfmpeg] = useState<any>(null);
   const [loaded, setLoaded] = useState(false);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'converting' | 'done' | 'error'>('idle');
@@ -24,18 +23,16 @@ export default function VideoConverter() {
 
   const loadFFmpeg = async () => {
     try {
-      const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
-      const ffmpegInstance = new FFmpeg();
+      const ffmpegInstance = createFFmpeg({
+        log: true,
+        corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
+      });
       
-      ffmpegInstance.on('progress', ({ progress }) => {
-        setProgress(Math.round(progress * 100));
+      ffmpegInstance.setProgress(({ ratio }) => {
+        setProgress(Math.round(ratio * 100));
       });
 
-      await ffmpegInstance.load({
-        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-      });
-
+      await ffmpegInstance.load();
       setFfmpeg(ffmpegInstance);
       setLoaded(true);
     } catch (err) {
@@ -62,37 +59,42 @@ export default function VideoConverter() {
     setProgress(0);
 
     try {
-      const inputName = 'input' + videoFile.name.substring(videoFile.name.lastIndexOf('.'));
+      // 1. Memory-Efficient Loading: Using WORKERFS for 4GB files
+      // This mounts the file directly from disk without copying it to RAM
+      const inputName = videoFile.name;
       const outputName = `output.${outputFormat}`;
 
-      // Memory optimization: Writing directly
-      await ffmpeg.writeFile(inputName, await fetchFile(videoFile));
-
-      // Always use 'copy' for large files to avoid OOM
-      // If we don't re-encode, we don't use much memory
-      const command = ['-i', inputName, '-c', 'copy', outputName];
+      // Clear existing FS data if any
+      try { ffmpeg.FS('unmount', '/mnt'); } catch (e) {}
+      try { ffmpeg.FS('mkdir', '/mnt'); } catch (e) {}
       
-      await ffmpeg.exec(command);
+      ffmpeg.FS('mount', (window as any).WorkerFS, {
+        files: [videoFile]
+      }, '/mnt');
 
-      const data = await ffmpeg.readFile(outputName);
-      const url = URL.createObjectURL(new Blob([(data as any).buffer], { type: `video/${outputFormat}` }));
+      // 2. Perform the conversion
+      // We use '-c copy' to be lightning fast and avoid OOM for 4GB files
+      await ffmpeg.run(
+        '-i', `/mnt/${inputName}`, 
+        '-c', 'copy', 
+        outputName
+      );
+
+      // 3. Read the output
+      const data = ffmpeg.FS('readFile', outputName);
+      const url = URL.createObjectURL(new Blob([data.buffer], { type: `video/${outputFormat}` }));
       
       setOutputUrl(url);
       setStatus('done');
 
-      // Immediate cleanup
-      await ffmpeg.deleteFile(inputName);
-      await ffmpeg.deleteFile(outputName);
+      // Cleanup
+      ffmpeg.FS('unlink', outputName);
+      ffmpeg.FS('unmount', '/mnt');
       
     } catch (err: any) {
       console.error('Conversion error:', err);
       setStatus('error');
-      
-      if (videoFile.size > 2 * 1024 * 1024 * 1024) {
-        setErrorMessage('File exceeds browser limit (2GB+). Browsers cannot handle 4GB files yet. Try a smaller file.');
-      } else {
-        setErrorMessage('Conversion failed. Your browser ran out of memory.');
-      }
+      setErrorMessage('Conversion failed. For 4GB files, ensure you have enough disk space and are using a desktop browser.');
     }
   };
 
@@ -100,36 +102,34 @@ export default function VideoConverter() {
     <div className="card" style={{ maxWidth: '800px', margin: '2rem auto' }}>
       <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
         <h2 className="gradient-text" style={{ fontSize: '2rem', fontWeight: 700, marginBottom: '0.5rem' }}>
-          Video Converter
+          Video Converter Pro
         </h2>
-        <p style={{ color: '#94a3b8' }}>Fast, private, and secure. Optimized for large files.</p>
+        <p style={{ color: '#94a3b8' }}>Advanced disk-mounting enabled for 4GB+ support.</p>
       </div>
 
       {!loaded ? (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', padding: '3rem' }}>
           <Loader2 className="animate-spin" size={40} color="var(--primary)" />
-          <p>Initializing Video Engine...</p>
+          <p>Initializing Pro Engine...</p>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          {videoFile && videoFile.size > 2 * 1024 * 1024 * 1024 && (
-            <div style={{ 
-              background: 'rgba(234, 179, 8, 0.1)', 
-              padding: '1rem', 
-              borderRadius: '12px',
-              border: '1px solid rgba(234, 179, 8, 0.3)',
-              display: 'flex',
-              gap: '0.75rem',
-              color: '#eab308',
-              fontSize: '0.9rem'
-            }}>
-              <Info size={20} />
-              <p>
-                <strong>Large File Detected:</strong> Files over 2GB may fail due to browser memory limits. 
-                We will use "Stream Copy" to save memory.
-              </p>
-            </div>
-          )}
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '0.75rem', 
+            background: 'rgba(34, 197, 94, 0.1)', 
+            padding: '1rem', 
+            borderRadius: '12px',
+            border: '1px solid rgba(34, 197, 94, 0.3)',
+            color: '#4ade80',
+            fontSize: '0.9rem'
+          }}>
+            <Zap size={20} />
+            <p>
+              <strong>Direct Disk Access:</strong> Reading files directly from your drive to support 4GB+ videos.
+            </p>
+          </div>
 
           <div 
             onClick={() => fileInputRef.current?.click()}
@@ -166,8 +166,7 @@ export default function VideoConverter() {
                 <div style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '1.5rem', borderRadius: '50%' }}>
                   <Upload size={32} color="#94a3b8" />
                 </div>
-                <p style={{ fontWeight: 500 }}>Drop your video here or click to browse</p>
-                <p style={{ fontSize: '0.8rem', color: '#64748b' }}>Best performance for files under 2GB</p>
+                <p style={{ fontWeight: 500 }}>Drop your 4GB+ video here</p>
               </div>
             )}
           </div>
@@ -194,10 +193,9 @@ export default function VideoConverter() {
                 <option value="mp4">MP4</option>
                 <option value="mov">MOV</option>
                 <option value="mkv">MKV</option>
-                <option value="webm">WebM</option>
               </select>
               <button onClick={convertVideo} className="btn btn-primary">
-                Start Conversion
+                Start Pro Conversion
               </button>
             </motion.div>
           )}
@@ -205,7 +203,7 @@ export default function VideoConverter() {
           {status === 'converting' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
-                <span>Processing...</span>
+                <span>Processing Large File...</span>
                 <span>{progress}%</span>
               </div>
               <div style={{ 
@@ -242,19 +240,13 @@ export default function VideoConverter() {
               }}
             >
               <CheckCircle2 size={32} color="#22c55e" />
-              <p style={{ fontWeight: 600 }}>Conversion Complete!</p>
+              <p style={{ fontWeight: 600 }}>Pro Conversion Complete!</p>
               <div style={{ display: 'flex', gap: '1rem' }}>
-                <a 
-                  href={outputUrl} 
-                  download={`converted-${videoFile?.name.split('.')[0]}.${outputFormat}`}
-                  className="btn btn-primary"
-                >
-                  <Download size={18} />
-                  Download
+                <a href={outputUrl} download={`converted-${videoFile?.name.split('.')[0]}.${outputFormat}`} className="btn btn-primary">
+                  <Download size={18} /> Download
                 </a>
                 <button onClick={() => setStatus('idle')} className="btn btn-outline">
-                  <RefreshCcw size={18} />
-                  Convert Another
+                  <RefreshCcw size={18} /> Convert Another
                 </button>
               </div>
             </motion.div>

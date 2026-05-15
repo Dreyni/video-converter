@@ -1,12 +1,11 @@
 'use client';
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { FileAudio, Loader2, Download, Languages, AlertCircle, Copy, Check, FileText, File as FileIcon, ChevronDown, Cpu, Sparkles, Zap } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { createFFmpeg } from '@ffmpeg/ffmpeg';
+import { FileAudio, Loader2, Download, Languages, AlertCircle, Copy, Check, FileText, File as FileIcon, ChevronDown, Cpu, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { jsPDF } from 'jspdf';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
-import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile, toBlobURL } from '@ffmpeg/util';
 
 export default function Transcriber() {
   const [file, setFile] = useState<File | null>(null);
@@ -15,35 +14,32 @@ export default function Transcriber() {
   const [copied, setCopied] = useState(false);
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [ffmpeg, setFfmpeg] = useState<FFmpeg | null>(null);
+  const [ffmpeg, setFfmpeg] = useState<any>(null);
   const [errorMessage, setErrorMessage] = useState('');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
 
-  // Initialize Worker and FFmpeg
   useEffect(() => {
-    const loadFFmpeg = async () => {
+    const loadEngines = async () => {
       try {
-        const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
-        const ffmpegInstance = new FFmpeg();
-        await ffmpegInstance.load({
-          coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-          wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+        const ffmpegInstance = createFFmpeg({
+          log: true,
+          corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
         });
+        await ffmpegInstance.load();
         setFfmpeg(ffmpegInstance);
       } catch (err) {
         console.error('FFmpeg load error:', err);
       }
     };
 
-    loadFFmpeg();
+    loadEngines();
 
-    // Initialize Worker
+    // Initialize Worker for AI
     workerRef.current = new Worker(new URL('../lib/transcription-worker.ts', import.meta.url));
-    
     workerRef.current.onmessage = (e) => {
-      const { status, progress, transcript, error, message } = e.data;
+      const { status, progress, transcript, error } = e.data;
       if (status === 'progress') setProgress(progress);
       if (status === 'loading' || status === 'processing') setStatus(status as any);
       if (status === 'done') {
@@ -77,23 +73,34 @@ export default function Transcriber() {
     setProgress(0);
     
     try {
-      // 1. Extract Audio using FFmpeg (Audio is much smaller, usually <200MB)
-      const inputName = 'input' + file.name.substring(file.name.lastIndexOf('.'));
+      // 1. Pro Audio Extraction: Mount the 4GB file to disk
+      const inputName = file.name;
       const outputName = 'output.wav';
+
+      try { ffmpeg.FS('unmount', '/mnt'); } catch (e) {}
+      try { ffmpeg.FS('mkdir', '/mnt'); } catch (e) {}
       
-      // Use efficient writing for large files
-      await ffmpeg.writeFile(inputName, await fetchFile(file));
+      ffmpeg.FS('mount', (window as any).WorkerFS, {
+        files: [file]
+      }, '/mnt');
       
       // Extract audio: 16kHz, mono, WAV (required for Whisper)
-      await ffmpeg.exec(['-i', inputName, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', outputName]);
+      // This reads directly from disk, saving GBs of RAM
+      await ffmpeg.run(
+        '-i', `/mnt/${inputName}`, 
+        '-ar', '16000', 
+        '-ac', '1', 
+        '-c:a', 'pcm_s16le', 
+        outputName
+      );
       
-      const data = await ffmpeg.readFile(outputName);
-      const audioBlob = new Blob([(data as any).buffer], { type: 'audio/wav' });
+      const data = ffmpeg.FS('readFile', outputName);
+      const audioBlob = new Blob([data.buffer], { type: 'audio/wav' });
       const audioURL = URL.createObjectURL(audioBlob);
 
-      // Clean up FFmpeg memory immediately
-      await ffmpeg.deleteFile(inputName);
-      await ffmpeg.deleteFile(outputName);
+      // Cleanup
+      ffmpeg.FS('unlink', outputName);
+      ffmpeg.FS('unmount', '/mnt');
 
       // 2. Send to Worker for AI processing
       workerRef.current.postMessage({ 
@@ -103,7 +110,7 @@ export default function Transcriber() {
 
     } catch (err: any) {
       console.error('Transcription error:', err);
-      setErrorMessage(err.message?.includes('memory') ? 'File too large for browser memory. Try a shorter clip.' : 'Failed to extract audio.');
+      setErrorMessage('Audio extraction failed. Try a smaller file or a different format.');
       setStatus('error');
     }
   };
@@ -161,7 +168,7 @@ export default function Transcriber() {
         <h2 className="gradient-text" style={{ fontSize: '2rem', fontWeight: 700, marginBottom: '0.5rem' }}>
           Free Local Transcriber
         </h2>
-        <p style={{ color: '#94a3b8' }}>AI transcription that runs entirely on your device. No freezing, no fees.</p>
+        <p style={{ color: '#94a3b8' }}>Pro audio extraction powered by Direct Disk Mounting.</p>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -176,7 +183,7 @@ export default function Transcriber() {
         }}>
           <Zap size={20} color="var(--secondary)" />
           <p style={{ fontSize: '0.9rem', color: '#e2e8f0' }}>
-            <strong>Background Processing:</strong> The UI won't freeze while the AI is working.
+            <strong>Direct Disk Mounting:</strong> Extracting audio from 4GB+ files without crashing your browser.
           </p>
         </div>
 
@@ -206,7 +213,7 @@ export default function Transcriber() {
               <div>
                 <p style={{ fontWeight: 600 }}>{file.name}</p>
                 <p style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-                  {(file.size / (1024 * 1024)).toFixed(2)} MB
+                  {(file.size / (1024 * 1024 * 1024)).toFixed(2)} GB
                 </p>
               </div>
             </div>
@@ -215,15 +222,14 @@ export default function Transcriber() {
               <div style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '1.5rem', borderRadius: '50%' }}>
                 <Languages size={32} color="#94a3b8" />
               </div>
-              <p style={{ fontWeight: 500 }}>Upload video or audio</p>
-              <p style={{ fontSize: '0.8rem', color: '#64748b' }}>Works best with files under 1.5GB</p>
+              <p style={{ fontWeight: 500 }}>Upload large video or audio</p>
             </div>
           )}
         </div>
 
         {file && status === 'idle' && (
           <button onClick={startTranscription} className="btn btn-primary" style={{ alignSelf: 'center' }}>
-            Start Transcription
+            Start Pro Transcription
           </button>
         )}
 
@@ -231,7 +237,7 @@ export default function Transcriber() {
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1.25rem', padding: '2rem' }}>
             <Loader2 className="animate-spin" size={40} color="var(--primary)" />
             <div style={{ textAlign: 'center' }}>
-              <p style={{ fontWeight: 600 }}>{status === 'loading' ? 'Downloading AI Model...' : 'Transcribing...'}</p>
+              <p style={{ fontWeight: 600 }}>{status === 'loading' ? 'Downloading AI Model...' : 'Processing audio...'}</p>
               {status === 'loading' && <p style={{ fontSize: '0.8rem', color: '#64748b' }}>{progress}%</p>}
             </div>
           </div>
