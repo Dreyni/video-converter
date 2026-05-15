@@ -152,28 +152,71 @@ export default function Transcriber() {
         await updateJob(activeJobId, { status: 'processing' });
       }
 
-      // Clean up any previous mounts
+      // Clean up any previous mounts and files
       try { await ffmpeg.unmount(mountPoint); } catch (e) {}
 
-      // For large files, use WORKERFS mounting to avoid loading entire file into memory
-      console.log(`File size: ${(file.size / (1024 * 1024 * 1024)).toFixed(2)} GB`);
-      setDebugLog(`Mounting ${inputName} (${(file.size / (1024 * 1024 * 1024)).toFixed(2)} GB) with direct disk access...`);
+      const fileSizeGB = file.size / (1024 * 1024 * 1024);
+      console.log(`File size: ${fileSizeGB.toFixed(2)} GB`);
+      setDebugLog(`Processing ${inputName} (${fileSizeGB.toFixed(2)} GB)...`);
       
-      let inputPath = `${mountPoint}/${inputName}`;
-      try {
-        // Mount using WORKERFS for direct disk access without loading entire file into memory
-        await ffmpeg.mount('WORKERFS' as any, { files: [file] }, mountPoint);
-        console.log('File mounted successfully using WORKERFS');
-        setDebugLog(`File mounted successfully using WORKERFS`);
-      } catch (mountError) {
-        console.error('WORKERFS mount failed:', mountError);
-        setDebugLog(`WORKERFS mount failed: ${String(mountError)}`);
-        throw new Error(`Failed to mount file: ${String(mountError)}`);
+      let inputPath = inputName;
+      
+      // For large files, use File.slice() to stream chunks to FFmpeg
+      if (fileSizeGB > 1) {
+        console.log('File is large (>1GB), using chunked approach...');
+        setDebugLog(`Loading file in chunks...`);
+        
+        // Write file in 50MB chunks to avoid memory issues
+        const chunkSize = 50 * 1024 * 1024;
+        let offset = 0;
+        let chunkIndex = 0;
+        
+        while (offset < file.size) {
+          const chunk = file.slice(offset, offset + chunkSize);
+          const chunkBuffer = await chunk.arrayBuffer();
+          const uint8Array = new Uint8Array(chunkBuffer);
+          
+          // For first chunk, write as new file; for subsequent chunks, append
+          if (chunkIndex === 0) {
+            await ffmpeg.writeFile(inputName, uint8Array);
+          } else {
+            // Append chunk - we need to read, concat, and write back
+            try {
+              const existing = await ffmpeg.readFile(inputName);
+              const existingUint8 = existing instanceof Uint8Array ? existing : new TextEncoder().encode(existing);
+              const concatenated = new Uint8Array(existingUint8.byteLength + uint8Array.byteLength);
+              concatenated.set(existingUint8, 0);
+              concatenated.set(uint8Array, existingUint8.byteLength);
+              await ffmpeg.writeFile(inputName, concatenated);
+            } catch (e) {
+              console.error('Failed to append chunk:', e);
+              throw e;
+            }
+          }
+          
+          offset += chunkSize;
+          chunkIndex++;
+          const progress = Math.round((offset / file.size) * 50); // 0-50% for file loading
+          setProgress(progress);
+          console.log(`Loaded chunk ${chunkIndex} (${(offset / (1024 * 1024)).toFixed(2)} MB / ${(file.size / (1024 * 1024)).toFixed(2)} MB)`);
+          setDebugLog(`Loaded chunk ${chunkIndex} (${(offset / (1024 * 1024)).toFixed(2)} / ${(file.size / (1024 * 1024)).toFixed(2)} MB)`);
+        }
+      } else {
+        // For smaller files, load normally
+        console.log('File is small (<1GB), loading normally...');
+        setDebugLog(`Loading file...`);
+        const fileBuffer = await file.arrayBuffer();
+        const uint8Array = new Uint8Array(fileBuffer);
+        await ffmpeg.writeFile(inputName, uint8Array);
+        setProgress(50);
       }
       
-      // Run FFmpeg conversion with mounted file
+      console.log('File loaded successfully.');
+      setDebugLog(`File loaded. Starting conversion...`);
+      
+      // Run FFmpeg conversion
       console.log('Starting FFmpeg audio extraction...');
-      setDebugLog(`Converting audio with FFmpeg...`);
+      setProgress(50);
       await ffmpeg.exec([
         '-i',
         inputPath,
@@ -183,6 +226,7 @@ export default function Transcriber() {
         outputName,
       ]);
       console.log('FFmpeg conversion complete.');
+      setProgress(80);
       
       // Add delay and read output file with retry
       await new Promise(resolve => setTimeout(resolve, 300));
@@ -213,14 +257,16 @@ export default function Transcriber() {
       const audioBlob = new Blob([outputBuffer], { type: 'audio/wav' });
       const audioURL = URL.createObjectURL(audioBlob);
       console.log('Audio blob created successfully.');
+      setProgress(90);
 
       // Cleanup files
       try { await ffmpeg.deleteFile(outputName); } catch (e) { console.warn('Failed to delete output file:', e); }
-      try { await ffmpeg.unmount(mountPoint); } catch (e) { console.warn('Failed to unmount:', e); }
+      try { await ffmpeg.deleteFile(inputName); } catch (e) { console.warn('Failed to delete input file:', e); }
 
       // Send to worker for transcription
       console.log('Sending audio to worker for transcription...');
       setDebugLog(`Sending to AI model for transcription...`);
+      setProgress(95);
       workerRef.current.postMessage({ 
         audioURL, 
         modelName: 'Xenova/whisper-tiny.en' 
