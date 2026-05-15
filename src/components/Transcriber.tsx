@@ -132,13 +132,10 @@ export default function Transcriber() {
     setDebugLog('');
     let activeJobId = jobId;
     
-    const mountPoint = '/input';
     try {
       const inputName = file.name;
       const outputName = 'output.wav';
       const fileBytes = new Uint8Array(await file.arrayBuffer());
-      let inputPath = `${mountPoint}/${inputName}`;
-      let usingMountedInput = true;
 
       if (!activeJobId) {
         const job = await createJob({
@@ -155,58 +152,72 @@ export default function Transcriber() {
         await updateJob(activeJobId, { status: 'processing' });
       }
 
-      try { await ffmpeg.unmount(mountPoint); } catch (e) {}
-
+      // Clear FFmpeg filesystem to avoid conflicts
       try {
-        await ffmpeg.mount('WORKERFS' as any, { files: [file] }, mountPoint);
-        inputPath = `${mountPoint}/${inputName}`;
-        usingMountedInput = true;
-      } catch (mountError) {
-        console.warn('WORKERFS mount failed, falling back to in-memory input:', mountError);
-        setDebugLog(`WORKERFS mount failed, falling back to in-memory input: ${String(mountError)}`);
-        await ffmpeg.writeFile(inputName, fileBytes);
-        inputPath = inputName;
-        usingMountedInput = false;
+        const files = await ffmpeg.listDir('/');
+        for (const file of files) {
+          if (file.name !== '.' && file.name !== '..') {
+            try { await ffmpeg.deleteFile(`/${file.name}`); } catch (e) {}
+          }
+        }
+      } catch (e) {
+        console.log('Could not list/clear FFmpeg filesystem, continuing...');
       }
+
+      // Write file to FFmpeg virtual filesystem
+      console.log('Writing file to FFmpeg virtual filesystem...');
+      setDebugLog(`Writing ${inputName} (${(fileBytes.length / (1024 * 1024)).toFixed(2)} MB) to FFmpeg...`);
+      await ffmpeg.writeFile(inputName, fileBytes);
+      console.log(`File written successfully.`);
       
+      // Run FFmpeg conversion
+      console.log('Starting FFmpeg audio extraction...');
+      setDebugLog(`Converting audio with FFmpeg...`);
       await ffmpeg.exec([
         '-i',
-        inputPath,
+        inputName,
         '-ar', '16000', 
         '-ac', '1', 
         '-c:a', 'pcm_s16le', 
         outputName,
       ]);
+      console.log('FFmpeg conversion complete.');
       
-      // Add a small delay to ensure file system is stable after FFmpeg processing
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Add delay and read output file with retry
+      await new Promise(resolve => setTimeout(resolve, 200));
       
-      // Retry reading the output file in case of transient permission issues
-      let data;
+      let data: any;
       let retries = 3;
       while (retries > 0) {
         try {
+          console.log(`Reading output file (attempt ${4 - retries}/3)...`);
           data = await ffmpeg.readFile(outputName);
+          console.log('Output file read successfully.');
           break;
         } catch (readError) {
           retries--;
-          if (retries === 0) throw readError;
-          await new Promise(resolve => setTimeout(resolve, 100));
+          if (retries === 0) {
+            console.error('Failed to read output file after retries:', readError);
+            throw new Error(`Failed to read audio output: ${String(readError)}`);
+          }
+          console.warn(`Read attempt failed, retrying in 200ms...`, readError);
+          await new Promise(resolve => setTimeout(resolve, 200));
         }
       }
       
+      // Convert to Blob
       const bytes = data instanceof Uint8Array ? data : new TextEncoder().encode(data);
       const outputBuffer = (bytes.buffer as ArrayBuffer).slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
       const audioBlob = new Blob([outputBuffer], { type: 'audio/wav' });
       const audioURL = URL.createObjectURL(audioBlob);
+      console.log('Audio blob created successfully.');
 
-      // Cleanup with retry logic
+      // Cleanup files
       try { await ffmpeg.deleteFile(outputName); } catch (e) { console.warn('Failed to delete output file:', e); }
-      if (!usingMountedInput) {
-        try { await ffmpeg.deleteFile(inputName); } catch (e) {}
-      }
-      try { await ffmpeg.unmount(mountPoint); } catch (e) {}
+      try { await ffmpeg.deleteFile(inputName); } catch (e) { console.warn('Failed to delete input file:', e); }
 
+      // Send to worker for transcription
+      console.log('Sending audio to worker for transcription...');
       workerRef.current.postMessage({ 
         audioURL, 
         modelName: 'Xenova/whisper-tiny.en' 
@@ -214,19 +225,20 @@ export default function Transcriber() {
 
     } catch (err: any) {
       console.error('Transcription error:', err);
-      setErrorMessage('Audio extraction failed: ' + (err?.message || String(err) || 'Unknown error'));
+      const errorMsg = err?.message || String(err) || 'Unknown error';
+      setErrorMessage('Audio extraction failed: ' + errorMsg);
+      setDebugLog(`Error: ${errorMsg}`);
       setStatus('error');
       if (activeJobId) {
         try {
           await updateJob(activeJobId, {
             status: 'error',
-            errorMessage: err?.message || String(err) || 'Audio extraction failed',
+            errorMessage: errorMsg,
           });
         } catch (backendError) {
           console.warn('Failed to update transcription job:', backendError);
         }
       }
-      try { await ffmpeg.unmount(mountPoint); } catch (e) {}
     }
   };
 
