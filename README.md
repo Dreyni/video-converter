@@ -44,10 +44,12 @@ This project now uses Supabase for job tracking and persistence.
 
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=https://avaojajwgjmcpviaikcy.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_public_anon_key
+# Optional: only if you want server-side admin access
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 ```
 
 3. Run the SQL in `supabase/schema.sql` to create the `jobs` table.
 4. The app will create and update job records through `/api/jobs` while conversion and transcription run.
 
-Note: the current media processing still runs in the browser. The backend is now in place for persistence and future server-side processing.
+Note: the current media processing still runs in the browser. The backend is now wired to Supabase for persistence and future server-side processing.

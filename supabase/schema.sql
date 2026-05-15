@@ -33,3 +33,24 @@ create trigger set_jobs_updated_at
 before update on public.jobs
 for each row
 execute function public.set_jobs_updated_at();
+
+alter table public.jobs enable row level security;
+
+drop policy if exists "jobs_select_all" on public.jobs;
+create policy "jobs_select_all"
+on public.jobs
+for select
+using (true);
+
+drop policy if exists "jobs_insert_all" on public.jobs;
+create policy "jobs_insert_all"
+on public.jobs
+for insert
+with check (true);
+
+drop policy if exists "jobs_update_all" on public.jobs;
+create policy "jobs_update_all"
+on public.jobs
+for update
+using (true)
+with check (true);
