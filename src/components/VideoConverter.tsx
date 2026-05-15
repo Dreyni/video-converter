@@ -14,6 +14,7 @@ export default function VideoConverter() {
   const [progress, setProgress] = useState(0);
   const [outputUrl, setOutputUrl] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [debugLog, setDebugLog] = useState('');
   const [outputFormat, setOutputFormat] = useState('mp4');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -22,6 +23,10 @@ export default function VideoConverter() {
     const loadFFmpeg = async () => {
       try {
         const ffmpeg = new FFmpeg();
+        ffmpeg.on('log', ({ message }) => {
+          setDebugLog(message);
+          console.log('[ffmpeg]', message);
+        });
         ffmpeg.on('progress', ({ progress: ratio }) => {
           setProgress(Math.round(ratio * 100));
         });
@@ -68,8 +73,9 @@ export default function VideoConverter() {
     setStatus('converting');
     setProgress(0);
     setErrorMessage('');
+    setDebugLog('');
 
-    const mountPoint = '/input';
+    const mountPoint = '/';
     const inputName = videoFile.name;
     const outputName = `output.${outputFormat}`;
 
@@ -82,7 +88,7 @@ export default function VideoConverter() {
 
       // Simple FFmpeg command - just copy streams
       await ffmpeg.exec([
-        '-i', `${mountPoint}/${inputName}`,
+        '-i', `/${inputName}`,
         '-c', 'copy',
         outputName
       ]);
@@ -103,7 +109,7 @@ export default function VideoConverter() {
     } catch (err: any) {
       console.error('Error:', err);
       setStatus('error');
-      setErrorMessage(err.message || 'Conversion failed');
+      setErrorMessage(err?.message || String(err) || 'Conversion failed');
     } finally {
       try { await ffmpeg.unmount(mountPoint); } catch (e) {}
     }
@@ -256,6 +262,7 @@ export default function VideoConverter() {
               <AlertCircle size={20} color="#ef4444" />
               <div>
                 <p style={{ color: '#fca5a5' }}>{errorMessage}</p>
+                {debugLog && <p style={{ marginTop: '0.5rem', color: '#fecaca', fontSize: '0.85rem', whiteSpace: 'pre-wrap' }}>{debugLog}</p>}
               </div>
             </div>
           )}

@@ -17,6 +17,7 @@ export default function Transcriber() {
   const [progress, setProgress] = useState(0);
   const ffmpegRef = useRef<FFmpeg | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [debugLog, setDebugLog] = useState('');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -25,6 +26,10 @@ export default function Transcriber() {
     const loadEngines = async () => {
       try {
         const ffmpeg = new FFmpeg();
+        ffmpeg.on('log', ({ message }) => {
+          setDebugLog(message);
+          console.log('[ffmpeg]', message);
+        });
         ffmpeg.on('progress', ({ progress: ratio }) => {
           setProgress(Math.round(ratio * 100));
         });
@@ -72,6 +77,8 @@ export default function Transcriber() {
       setFile(selectedFile);
       setStatus('idle');
       setTranscript('');
+      setErrorMessage('');
+      setDebugLog('');
     }
   };
 
@@ -81,8 +88,10 @@ export default function Transcriber() {
 
     setStatus('processing');
     setProgress(0);
+    setErrorMessage('');
+    setDebugLog('');
     
-    const mountPoint = '/input';
+    const mountPoint = '/';
     try {
       const inputName = file.name;
       const outputName = 'output.wav';
@@ -93,7 +102,7 @@ export default function Transcriber() {
       
       await ffmpeg.exec([
         '-i',
-        `${mountPoint}/${inputName}`,
+        `/${inputName}`,
         '-ar', '16000', 
         '-ac', '1', 
         '-c:a', 'pcm_s16le', 
@@ -116,7 +125,7 @@ export default function Transcriber() {
 
     } catch (err: any) {
       console.error('Transcription error:', err);
-      setErrorMessage('Audio extraction failed: ' + (err.message || 'Unknown error'));
+      setErrorMessage('Audio extraction failed: ' + (err?.message || String(err) || 'Unknown error'));
       setStatus('error');
       try { await ffmpeg.unmount(mountPoint); } catch (e) {}
     }
@@ -178,6 +187,7 @@ export default function Transcriber() {
         <p style={{ color: '#94a3b8' }}>Pro audio extraction powered by Direct Disk Mounting.</p>
       </div>
 
+                {debugLog && <p style={{ marginTop: '0.5rem', color: '#fecaca', fontSize: '0.85rem', whiteSpace: 'pre-wrap' }}>{debugLog}</p>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
         <div style={{ 
           display: 'flex', 
