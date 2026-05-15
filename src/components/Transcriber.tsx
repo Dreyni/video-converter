@@ -159,63 +159,33 @@ export default function Transcriber() {
       console.log(`File size: ${fileSizeGB.toFixed(2)} GB`);
       setDebugLog(`Processing ${inputName} (${fileSizeGB.toFixed(2)} GB)...`);
       
+      // Check if file is too large for browser processing
+      const maxBrowserSize = 2 * 1024 * 1024 * 1024; // 2GB limit for browser
+      if (file.size > maxBrowserSize) {
+        throw new Error(`File size (${fileSizeGB.toFixed(2)} GB) exceeds browser processing limit of 2GB. Please use a smaller file or process on a server.`);
+      }
+      
       let inputPath = inputName;
       
-      // For large files, use File.slice() to stream chunks to FFmpeg
-      if (fileSizeGB > 1) {
-        console.log('File is large (>1GB), using chunked approach...');
-        setDebugLog(`Loading file in chunks...`);
-        
-        // Write file in 50MB chunks to avoid memory issues
-        const chunkSize = 50 * 1024 * 1024;
-        let offset = 0;
-        let chunkIndex = 0;
-        
-        while (offset < file.size) {
-          const chunk = file.slice(offset, offset + chunkSize);
-          const chunkBuffer = await chunk.arrayBuffer();
-          const uint8Array = new Uint8Array(chunkBuffer);
-          
-          // For first chunk, write as new file; for subsequent chunks, append
-          if (chunkIndex === 0) {
-            await ffmpeg.writeFile(inputName, uint8Array);
-          } else {
-            // Append chunk - we need to read, concat, and write back
-            try {
-              const existing = await ffmpeg.readFile(inputName);
-              const existingUint8 = existing instanceof Uint8Array ? existing : new TextEncoder().encode(existing);
-              const concatenated = new Uint8Array(existingUint8.byteLength + uint8Array.byteLength);
-              concatenated.set(existingUint8, 0);
-              concatenated.set(uint8Array, existingUint8.byteLength);
-              await ffmpeg.writeFile(inputName, concatenated);
-            } catch (e) {
-              console.error('Failed to append chunk:', e);
-              throw e;
-            }
-          }
-          
-          offset += chunkSize;
-          chunkIndex++;
-          const progress = Math.round((offset / file.size) * 50); // 0-50% for file loading
-          setProgress(progress);
-          console.log(`Loaded chunk ${chunkIndex} (${(offset / (1024 * 1024)).toFixed(2)} MB / ${(file.size / (1024 * 1024)).toFixed(2)} MB)`);
-          setDebugLog(`Loaded chunk ${chunkIndex} (${(offset / (1024 * 1024)).toFixed(2)} / ${(file.size / (1024 * 1024)).toFixed(2)} MB)`);
-        }
-      } else {
-        // For smaller files, load normally
-        console.log('File is small (<1GB), loading normally...');
-        setDebugLog(`Loading file...`);
+      // For all files, load directly - FFmpeg.js handles the memory
+      console.log('Loading file to FFmpeg virtual filesystem...');
+      setDebugLog(`Loading ${inputName} (${(file.size / (1024 * 1024)).toFixed(2)} MB)...`);
+      
+      try {
         const fileBuffer = await file.arrayBuffer();
         const uint8Array = new Uint8Array(fileBuffer);
         await ffmpeg.writeFile(inputName, uint8Array);
+        console.log('File loaded successfully.');
+        setDebugLog(`File loaded successfully.`);
         setProgress(50);
+      } catch (loadError) {
+        console.error('Failed to load file:', loadError);
+        throw new Error(`Failed to load file into processing engine: ${String(loadError)}. The file may be too large or corrupted.`);
       }
-      
-      console.log('File loaded successfully.');
-      setDebugLog(`File loaded. Starting conversion...`);
       
       // Run FFmpeg conversion
       console.log('Starting FFmpeg audio extraction...');
+      setDebugLog(`Converting audio with FFmpeg...`);
       setProgress(50);
       await ffmpeg.exec([
         '-i',
