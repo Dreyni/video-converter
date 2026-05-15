@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
-import { Upload, FileVideo, CheckCircle2, Loader2, Download, AlertCircle, RefreshCcw } from 'lucide-react';
+import { Upload, FileVideo, CheckCircle2, Loader2, Download, AlertCircle, RefreshCcw, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function VideoConverter() {
@@ -27,10 +27,6 @@ export default function VideoConverter() {
       const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
       const ffmpegInstance = new FFmpeg();
       
-      ffmpegInstance.on('log', ({ message }) => {
-        console.log(message);
-      });
-
       ffmpegInstance.on('progress', ({ progress }) => {
         setProgress(Math.round(progress * 100));
       });
@@ -69,15 +65,12 @@ export default function VideoConverter() {
       const inputName = 'input' + videoFile.name.substring(videoFile.name.lastIndexOf('.'));
       const outputName = `output.${outputFormat}`;
 
+      // Memory optimization: Writing directly
       await ffmpeg.writeFile(inputName, await fetchFile(videoFile));
 
-      // For 4GB files, we MUST use stream copy if possible to avoid OOM
-      // If the user wants to change container only, -c copy is lightning fast
+      // Always use 'copy' for large files to avoid OOM
+      // If we don't re-encode, we don't use much memory
       const command = ['-i', inputName, '-c', 'copy', outputName];
-      
-      // If formats are very different, we might need full re-encoding, 
-      // but warn user about memory
-      // ['-i', inputName, outputName]
       
       await ffmpeg.exec(command);
 
@@ -86,10 +79,20 @@ export default function VideoConverter() {
       
       setOutputUrl(url);
       setStatus('done');
-    } catch (err) {
+
+      // Immediate cleanup
+      await ffmpeg.deleteFile(inputName);
+      await ffmpeg.deleteFile(outputName);
+      
+    } catch (err: any) {
       console.error('Conversion error:', err);
       setStatus('error');
-      setErrorMessage('Error processing large file. Browser memory limit reached.');
+      
+      if (videoFile.size > 2 * 1024 * 1024 * 1024) {
+        setErrorMessage('File exceeds browser limit (2GB+). Browsers cannot handle 4GB files yet. Try a smaller file.');
+      } else {
+        setErrorMessage('Conversion failed. Your browser ran out of memory.');
+      }
     }
   };
 
@@ -99,7 +102,7 @@ export default function VideoConverter() {
         <h2 className="gradient-text" style={{ fontSize: '2rem', fontWeight: 700, marginBottom: '0.5rem' }}>
           Video Converter
         </h2>
-        <p style={{ color: '#94a3b8' }}>Fast, private, and secure. Processes right in your browser.</p>
+        <p style={{ color: '#94a3b8' }}>Fast, private, and secure. Optimized for large files.</p>
       </div>
 
       {!loaded ? (
@@ -109,6 +112,25 @@ export default function VideoConverter() {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          {videoFile && videoFile.size > 2 * 1024 * 1024 * 1024 && (
+            <div style={{ 
+              background: 'rgba(234, 179, 8, 0.1)', 
+              padding: '1rem', 
+              borderRadius: '12px',
+              border: '1px solid rgba(234, 179, 8, 0.3)',
+              display: 'flex',
+              gap: '0.75rem',
+              color: '#eab308',
+              fontSize: '0.9rem'
+            }}>
+              <Info size={20} />
+              <p>
+                <strong>Large File Detected:</strong> Files over 2GB may fail due to browser memory limits. 
+                We will use "Stream Copy" to save memory.
+              </p>
+            </div>
+          )}
+
           <div 
             onClick={() => fileInputRef.current?.click()}
             style={{
@@ -120,8 +142,6 @@ export default function VideoConverter() {
               background: videoFile ? 'rgba(139, 92, 246, 0.05)' : 'transparent',
               transition: 'all 0.2s ease',
             }}
-            onMouseOver={(e) => (e.currentTarget.style.borderColor = 'var(--primary)')}
-            onMouseOut={(e) => (e.currentTarget.style.borderColor = 'var(--glass-border)')}
           >
             <input 
               type="file" 
@@ -143,15 +163,11 @@ export default function VideoConverter() {
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
-                <div style={{ 
-                  background: 'rgba(255, 255, 255, 0.05)', 
-                  padding: '1.5rem', 
-                  borderRadius: '50%' 
-                }}>
+                <div style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '1.5rem', borderRadius: '50%' }}>
                   <Upload size={32} color="#94a3b8" />
                 </div>
                 <p style={{ fontWeight: 500 }}>Drop your video here or click to browse</p>
-                <p style={{ fontSize: '0.8rem', color: '#64748b' }}>Supports files up to 4GB+</p>
+                <p style={{ fontSize: '0.8rem', color: '#64748b' }}>Best performance for files under 2GB</p>
               </div>
             )}
           </div>
