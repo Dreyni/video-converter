@@ -178,13 +178,30 @@ export default function Transcriber() {
         outputName,
       ]);
       
-      const data = await ffmpeg.readFile(outputName);
+      // Add a small delay to ensure file system is stable after FFmpeg processing
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Retry reading the output file in case of transient permission issues
+      let data;
+      let retries = 3;
+      while (retries > 0) {
+        try {
+          data = await ffmpeg.readFile(outputName);
+          break;
+        } catch (readError) {
+          retries--;
+          if (retries === 0) throw readError;
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+      
       const bytes = data instanceof Uint8Array ? data : new TextEncoder().encode(data);
       const outputBuffer = (bytes.buffer as ArrayBuffer).slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
       const audioBlob = new Blob([outputBuffer], { type: 'audio/wav' });
       const audioURL = URL.createObjectURL(audioBlob);
 
-      await ffmpeg.deleteFile(outputName);
+      // Cleanup with retry logic
+      try { await ffmpeg.deleteFile(outputName); } catch (e) { console.warn('Failed to delete output file:', e); }
       if (!usingMountedInput) {
         try { await ffmpeg.deleteFile(inputName); } catch (e) {}
       }
