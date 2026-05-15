@@ -7,6 +7,7 @@ import { FileAudio, Loader2, Download, Languages, AlertCircle, Copy, Check, File
 import { motion, AnimatePresence } from 'framer-motion';
 import { jsPDF } from 'jspdf';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
+import { createJob, updateJob } from '@/lib/jobs';
 
 export default function Transcriber() {
   const [file, setFile] = useState<File | null>(null);
@@ -18,6 +19,9 @@ export default function Transcriber() {
   const ffmpegRef = useRef<FFmpeg | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [debugLog, setDebugLog] = useState('');
+  const [jobId, setJobId] = useState<string | null>(null);
+  const jobIdRef = useRef<string | null>(null);
+  const [backendMessage, setBackendMessage] = useState('');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -58,10 +62,26 @@ export default function Transcriber() {
       if (status === 'done') {
         setTranscript(transcript);
         setStatus('done');
+        if (jobIdRef.current) {
+          void updateJob(jobIdRef.current, {
+            status: 'done',
+            transcript,
+          }).catch((backendError) => {
+            console.warn('Failed to save completed transcript job:', backendError);
+          });
+        }
       }
       if (status === 'error') {
         setErrorMessage(error || 'AI processing failed.');
         setStatus('error');
+        if (jobIdRef.current) {
+          void updateJob(jobIdRef.current, {
+            status: 'error',
+            errorMessage: error || 'AI processing failed.',
+          }).catch((backendError) => {
+            console.warn('Failed to save transcript error job:', backendError);
+          });
+        }
       }
     };
 
@@ -79,6 +99,26 @@ export default function Transcriber() {
       setTranscript('');
       setErrorMessage('');
       setDebugLog('');
+      setBackendMessage('');
+      setJobId(null);
+      jobIdRef.current = null;
+
+      void (async () => {
+        try {
+          const job = await createJob({
+            kind: 'transcribe',
+            filename: selectedFile.name,
+            fileSize: selectedFile.size,
+          });
+
+          setJobId(job.id);
+          jobIdRef.current = job.id;
+          setBackendMessage(`Saved job ${job.id.slice(0, 8)} to Supabase.`);
+        } catch (error) {
+          console.warn('Failed to create backend job:', error);
+          setBackendMessage('Backend job could not be saved, but local transcription still works.');
+        }
+      })();
     }
   };
 
@@ -90,11 +130,27 @@ export default function Transcriber() {
     setProgress(0);
     setErrorMessage('');
     setDebugLog('');
+    let activeJobId = jobId;
     
     const mountPoint = '/';
     try {
       const inputName = file.name;
       const outputName = 'output.wav';
+
+      if (!activeJobId) {
+        const job = await createJob({
+          kind: 'transcribe',
+          filename: file.name,
+          fileSize: file.size,
+        });
+        activeJobId = job.id;
+        setJobId(job.id);
+        jobIdRef.current = job.id;
+      }
+
+      if (activeJobId) {
+        await updateJob(activeJobId, { status: 'processing' });
+      }
 
       try { await ffmpeg.unmount(mountPoint); } catch (e) {}
 
@@ -127,6 +183,16 @@ export default function Transcriber() {
       console.error('Transcription error:', err);
       setErrorMessage('Audio extraction failed: ' + (err?.message || String(err) || 'Unknown error'));
       setStatus('error');
+      if (activeJobId) {
+        try {
+          await updateJob(activeJobId, {
+            status: 'error',
+            errorMessage: err?.message || String(err) || 'Audio extraction failed',
+          });
+        } catch (backendError) {
+          console.warn('Failed to update transcription job:', backendError);
+        }
+      }
       try { await ffmpeg.unmount(mountPoint); } catch (e) {}
     }
   };
@@ -185,9 +251,10 @@ export default function Transcriber() {
           Free Local Transcriber
         </h2>
         <p style={{ color: '#94a3b8' }}>Pro audio extraction powered by Direct Disk Mounting.</p>
+        {backendMessage && <p style={{ marginTop: '0.75rem', color: '#cbd5e1', fontSize: '0.9rem' }}>{backendMessage}</p>}
       </div>
 
-                {debugLog && <p style={{ marginTop: '0.5rem', color: '#fecaca', fontSize: '0.85rem', whiteSpace: 'pre-wrap' }}>{debugLog}</p>}
+              {debugLog && <p style={{ marginTop: '0.5rem', color: '#fecaca', fontSize: '0.85rem', whiteSpace: 'pre-wrap' }}>{debugLog}</p>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
         <div style={{ 
           display: 'flex', 

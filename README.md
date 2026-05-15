@@ -34,3 +34,20 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Supabase Backend
+
+This project now uses Supabase for job tracking and persistence.
+
+1. Create a Supabase project or use your existing project URL: `https://avaojajwgjmcpviaikcy.supabase.co`
+2. Add these environment variables in Vercel or your local `.env.local` file:
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=https://avaojajwgjmcpviaikcy.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+```
+
+3. Run the SQL in `supabase/schema.sql` to create the `jobs` table.
+4. The app will create and update job records through `/api/jobs` while conversion and transcription run.
+
+Note: the current media processing still runs in the browser. The backend is now in place for persistence and future server-side processing.

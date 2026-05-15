@@ -5,6 +5,7 @@ import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { toBlobURL } from '@ffmpeg/util';
 import { Upload, FileVideo, CheckCircle2, Loader2, Download, AlertCircle, RefreshCcw } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { createJob, updateJob } from '@/lib/jobs';
 
 export default function VideoConverter() {
   const ffmpegRef = useRef<FFmpeg | null>(null);
@@ -15,6 +16,8 @@ export default function VideoConverter() {
   const [outputUrl, setOutputUrl] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [debugLog, setDebugLog] = useState('');
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [backendMessage, setBackendMessage] = useState('');
   const [outputFormat, setOutputFormat] = useState('mp4');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -63,6 +66,26 @@ export default function VideoConverter() {
       setStatus('idle');
       setProgress(0);
       setErrorMessage('');
+      setDebugLog('');
+      setBackendMessage('');
+      setJobId(null);
+
+      void (async () => {
+        try {
+          const job = await createJob({
+            kind: 'convert',
+            filename: file.name,
+            fileSize: file.size,
+            outputFormat,
+          });
+
+          setJobId(job.id);
+          setBackendMessage(`Saved job ${job.id.slice(0, 8)} to Supabase.`);
+        } catch (error) {
+          console.warn('Failed to create backend job:', error);
+          setBackendMessage('Backend job could not be saved, but local conversion still works.');
+        }
+      })();
     }
   };
 
@@ -78,8 +101,27 @@ export default function VideoConverter() {
     const mountPoint = '/';
     const inputName = videoFile.name;
     const outputName = `output.${outputFormat}`;
+    let activeJobId = jobId;
 
     try {
+      if (!activeJobId) {
+        const job = await createJob({
+          kind: 'convert',
+          filename: videoFile.name,
+          fileSize: videoFile.size,
+          outputFormat,
+        });
+        activeJobId = job.id;
+        setJobId(job.id);
+      }
+
+      if (activeJobId) {
+        await updateJob(activeJobId, {
+          status: 'processing',
+          outputFormat,
+        });
+      }
+
       // Unmount if already mounted
       try { await ffmpeg.unmount(mountPoint); } catch (e) {}
 
@@ -103,6 +145,13 @@ export default function VideoConverter() {
       setStatus('done');
       setProgress(100);
 
+      if (activeJobId) {
+        await updateJob(activeJobId, {
+          status: 'done',
+          outputFormat,
+        });
+      }
+
       // Cleanup
       try { await ffmpeg.deleteFile(outputName); } catch (e) {}
       
@@ -110,6 +159,18 @@ export default function VideoConverter() {
       console.error('Error:', err);
       setStatus('error');
       setErrorMessage(err?.message || String(err) || 'Conversion failed');
+
+      if (activeJobId) {
+        try {
+          await updateJob(activeJobId, {
+            status: 'error',
+            errorMessage: err?.message || String(err) || 'Conversion failed',
+            outputFormat,
+          });
+        } catch (backendError) {
+          console.warn('Failed to update job error status:', backendError);
+        }
+      }
     } finally {
       try { await ffmpeg.unmount(mountPoint); } catch (e) {}
     }
@@ -122,6 +183,7 @@ export default function VideoConverter() {
           Video Converter
         </h2>
         <p style={{ color: '#94a3b8' }}>Convert videos locally in your browser</p>
+        {backendMessage && <p style={{ marginTop: '0.75rem', color: '#cbd5e1', fontSize: '0.9rem' }}>{backendMessage}</p>}
       </div>
 
       {!loaded ? (
