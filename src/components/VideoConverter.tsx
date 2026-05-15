@@ -84,10 +84,31 @@ export default function VideoConverter() {
 
       const args: string[] = [];
       
-      if (startTime) args.push('-ss', startTime);
-      if (endTime) args.push('-to', endTime);
+      // Handle trim with -ss and -t (more reliable than -to)
+      if (startTime && startTime.match(/^\d{1,2}:\d{2}:\d{2}$/)) {
+        args.push('-ss', startTime);
+      }
       
-      args.push('-i', `${mountPoint}/${inputName}`, '-c', 'copy', outputName);
+      args.push('-i', `${mountPoint}/${inputName}`);
+      
+      if (endTime && endTime.match(/^\d{1,2}:\d{2}:\d{2}$/)) {
+        if (startTime && startTime.match(/^\d{1,2}:\d{2}:\d{2}$/)) {
+          // Calculate duration
+          const [sH, sM, sS] = startTime.split(':').map(Number);
+          const [eH, eM, eS] = endTime.split(':').map(Number);
+          const startSecs = sH * 3600 + sM * 60 + sS;
+          const endSecs = eH * 3600 + eM * 60 + eS;
+          const durationSecs = endSecs - startSecs;
+          if (durationSecs > 0) {
+            args.push('-t', String(durationSecs));
+          }
+        } else {
+          // No start time, use -to
+          args.push('-to', endTime);
+        }
+      }
+      
+      args.push('-c', 'copy', outputName);
       
       await ffmpeg.exec(args);
 
