@@ -132,10 +132,10 @@ export default function Transcriber() {
     setDebugLog('');
     let activeJobId = jobId;
     
+    const mountPoint = '/input';
     try {
       const inputName = file.name;
       const outputName = 'output.wav';
-      const fileBytes = new Uint8Array(await file.arrayBuffer());
 
       if (!activeJobId) {
         const job = await createJob({
@@ -152,30 +152,31 @@ export default function Transcriber() {
         await updateJob(activeJobId, { status: 'processing' });
       }
 
-      // Clear FFmpeg filesystem to avoid conflicts
-      try {
-        const files = await ffmpeg.listDir('/');
-        for (const file of files) {
-          if (file.name !== '.' && file.name !== '..') {
-            try { await ffmpeg.deleteFile(`/${file.name}`); } catch (e) {}
-          }
-        }
-      } catch (e) {
-        console.log('Could not list/clear FFmpeg filesystem, continuing...');
-      }
+      // Clean up any previous mounts
+      try { await ffmpeg.unmount(mountPoint); } catch (e) {}
 
-      // Write file to FFmpeg virtual filesystem
-      console.log('Writing file to FFmpeg virtual filesystem...');
-      setDebugLog(`Writing ${inputName} (${(fileBytes.length / (1024 * 1024)).toFixed(2)} MB) to FFmpeg...`);
-      await ffmpeg.writeFile(inputName, fileBytes);
-      console.log(`File written successfully.`);
+      // For large files, use WORKERFS mounting to avoid loading entire file into memory
+      console.log(`File size: ${(file.size / (1024 * 1024 * 1024)).toFixed(2)} GB`);
+      setDebugLog(`Mounting ${inputName} (${(file.size / (1024 * 1024 * 1024)).toFixed(2)} GB) with direct disk access...`);
       
-      // Run FFmpeg conversion
+      let inputPath = `${mountPoint}/${inputName}`;
+      try {
+        // Mount using WORKERFS for direct disk access without loading entire file into memory
+        await ffmpeg.mount('WORKERFS' as any, { files: [file] }, mountPoint);
+        console.log('File mounted successfully using WORKERFS');
+        setDebugLog(`File mounted successfully using WORKERFS`);
+      } catch (mountError) {
+        console.error('WORKERFS mount failed:', mountError);
+        setDebugLog(`WORKERFS mount failed: ${String(mountError)}`);
+        throw new Error(`Failed to mount file: ${String(mountError)}`);
+      }
+      
+      // Run FFmpeg conversion with mounted file
       console.log('Starting FFmpeg audio extraction...');
       setDebugLog(`Converting audio with FFmpeg...`);
       await ffmpeg.exec([
         '-i',
-        inputName,
+        inputPath,
         '-ar', '16000', 
         '-ac', '1', 
         '-c:a', 'pcm_s16le', 
@@ -184,15 +185,16 @@ export default function Transcriber() {
       console.log('FFmpeg conversion complete.');
       
       // Add delay and read output file with retry
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise(resolve => setTimeout(resolve, 300));
       
       let data: any;
-      let retries = 3;
+      let retries = 5;
       while (retries > 0) {
         try {
-          console.log(`Reading output file (attempt ${4 - retries}/3)...`);
+          console.log(`Reading output file (attempt ${6 - retries}/5)...`);
           data = await ffmpeg.readFile(outputName);
           console.log('Output file read successfully.');
+          setDebugLog(`Output file read successfully (${(data.byteLength / 1024).toFixed(2)} KB)`);
           break;
         } catch (readError) {
           retries--;
@@ -200,8 +202,8 @@ export default function Transcriber() {
             console.error('Failed to read output file after retries:', readError);
             throw new Error(`Failed to read audio output: ${String(readError)}`);
           }
-          console.warn(`Read attempt failed, retrying in 200ms...`, readError);
-          await new Promise(resolve => setTimeout(resolve, 200));
+          console.warn(`Read attempt failed, retrying...`, readError);
+          await new Promise(resolve => setTimeout(resolve, 300));
         }
       }
       
@@ -214,10 +216,11 @@ export default function Transcriber() {
 
       // Cleanup files
       try { await ffmpeg.deleteFile(outputName); } catch (e) { console.warn('Failed to delete output file:', e); }
-      try { await ffmpeg.deleteFile(inputName); } catch (e) { console.warn('Failed to delete input file:', e); }
+      try { await ffmpeg.unmount(mountPoint); } catch (e) { console.warn('Failed to unmount:', e); }
 
       // Send to worker for transcription
       console.log('Sending audio to worker for transcription...');
+      setDebugLog(`Sending to AI model for transcription...`);
       workerRef.current.postMessage({ 
         audioURL, 
         modelName: 'Xenova/whisper-tiny.en' 
@@ -239,6 +242,7 @@ export default function Transcriber() {
           console.warn('Failed to update transcription job:', backendError);
         }
       }
+      try { await ffmpeg.unmount(mountPoint); } catch (e) {}
     }
   };
 
