@@ -17,6 +17,8 @@ export default function Transcriber() {
   const [progress, setProgress] = useState(0);
   const ffmpegRef = useRef<FFmpeg | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -71,8 +73,8 @@ export default function Transcriber() {
     if (selectedFile) {
       setFile(selectedFile);
       setStatus('idle');
-      setTranscript('');
-    }
+      setTranscript('');      setStartTime('');
+      setEndTime('');    }
   };
 
   const startTranscription = async () => {
@@ -93,14 +95,17 @@ export default function Transcriber() {
         files: [file]
       }, mountPoint);
       
-      await ffmpeg.exec([
+      const args = [
         '-i',
         `${mountPoint}/${inputName}`,
-        '-ar', '16000', 
-        '-ac', '1', 
-        '-c:a', 'pcm_s16le', 
-        outputName,
-      ]);
+      ];
+      
+      if (startTime) args.push('-ss', startTime);
+      if (endTime) args.push('-to', endTime);
+      
+      args.push('-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', outputName);
+      
+      await ffmpeg.exec(args);
       
       const data = await ffmpeg.readFile(outputName);
       const bytes = data instanceof Uint8Array ? data : new TextEncoder().encode(data);
@@ -237,9 +242,65 @@ export default function Transcriber() {
         </div>
 
         {file && status === 'idle' && (
-          <button onClick={startTranscription} className="btn btn-primary" style={{ alignSelf: 'center' }}>
-            Start Pro Transcription
-          </button>
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            style={{ display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center' }}
+          >
+            <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap', justifyContent: 'center' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <label style={{ fontSize: '0.9rem', color: '#cbd5e1' }}>Start (HH:MM:SS)</label>
+                <input 
+                  type="text" 
+                  value={startTime}
+                  onChange={(e) => setStartTime(e.target.value)}
+                  placeholder="00:00:00"
+                  style={{
+                    background: 'var(--glass-bg)',
+                    border: '1px solid var(--glass-border)',
+                    color: 'white',
+                    padding: '0.5rem',
+                    borderRadius: '8px',
+                    outline: 'none',
+                    width: '120px'
+                  }}
+                />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <label style={{ fontSize: '0.9rem', color: '#cbd5e1' }}>End (HH:MM:SS)</label>
+                <input 
+                  type="text" 
+                  value={endTime}
+                  onChange={(e) => setEndTime(e.target.value)}
+                  placeholder="optional"
+                  style={{
+                    background: 'var(--glass-bg)',
+                    border: '1px solid var(--glass-border)',
+                    color: 'white',
+                    padding: '0.5rem',
+                    borderRadius: '8px',
+                    outline: 'none',
+                    width: '120px'
+                  }}
+                />
+              </div>
+            </div>
+            
+            <div style={{ display: 'flex', gap: '1rem' }}>
+              <button onClick={startTranscription} className="btn btn-primary">
+                Start Pro Transcription
+              </button>
+              {(startTime || endTime) && (
+                <button 
+                  onClick={() => { setStartTime(''); setEndTime(''); }} 
+                  className="btn btn-outline"
+                  style={{ fontSize: '0.9rem' }}
+                >
+                  Clear Trim
+                </button>
+              )}
+            </div>
+          </motion.div>
         )}
 
         {(status === 'loading' || status === 'processing') && (

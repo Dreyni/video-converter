@@ -15,6 +15,8 @@ export default function VideoConverter() {
   const [outputUrl, setOutputUrl] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [outputFormat, setOutputFormat] = useState('mp4');
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -57,6 +59,8 @@ export default function VideoConverter() {
       setOutputUrl(null);
       setStatus('idle');
       setProgress(0);
+      setStartTime('');
+      setEndTime('');
     }
   };
 
@@ -78,12 +82,17 @@ export default function VideoConverter() {
         files: [videoFile]
       }, mountPoint);
 
-      await ffmpeg.exec([
+      const args = [
         '-i',
         `${mountPoint}/${inputName}`,
-        '-c', 'copy', 
-        outputName,
-      ]);
+      ];
+      
+      if (startTime) args.push('-ss', startTime);
+      if (endTime) args.push('-to', endTime);
+      
+      args.push('-c', 'copy', outputName);
+      
+      await ffmpeg.exec(args);
 
       const data = await ffmpeg.readFile(outputName);
       const bytes = data instanceof Uint8Array ? data : new TextEncoder().encode(data);
@@ -181,28 +190,81 @@ export default function VideoConverter() {
             <motion.div 
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '1rem' }}
+              style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}
             >
-              <span>Convert to:</span>
-              <select 
-                value={outputFormat}
-                onChange={(e) => setOutputFormat(e.target.value)}
-                style={{
-                  background: 'var(--glass-bg)',
-                  border: '1px solid var(--glass-border)',
-                  color: 'white',
-                  padding: '0.5rem 1rem',
-                  borderRadius: '8px',
-                  outline: 'none'
-                }}
-              >
-                <option value="mp4">MP4</option>
-                <option value="mov">MOV</option>
-                <option value="mkv">MKV</option>
-              </select>
-              <button onClick={convertVideo} className="btn btn-primary">
-                Start Pro Conversion
-              </button>
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                <span>Convert to:</span>
+                <select 
+                  value={outputFormat}
+                  onChange={(e) => setOutputFormat(e.target.value)}
+                  style={{
+                    background: 'var(--glass-bg)',
+                    border: '1px solid var(--glass-border)',
+                    color: 'white',
+                    padding: '0.5rem 1rem',
+                    borderRadius: '8px',
+                    outline: 'none'
+                  }}
+                >
+                  <option value="mp4">MP4</option>
+                  <option value="mov">MOV</option>
+                  <option value="mkv">MKV</option>
+                </select>
+              </div>
+              
+              <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap', justifyContent: 'center' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <label style={{ fontSize: '0.9rem', color: '#cbd5e1' }}>Start (HH:MM:SS)</label>
+                  <input 
+                    type="text" 
+                    value={startTime}
+                    onChange={(e) => setStartTime(e.target.value)}
+                    placeholder="00:00:00"
+                    style={{
+                      background: 'var(--glass-bg)',
+                      border: '1px solid var(--glass-border)',
+                      color: 'white',
+                      padding: '0.5rem',
+                      borderRadius: '8px',
+                      outline: 'none',
+                      width: '120px'
+                    }}
+                  />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <label style={{ fontSize: '0.9rem', color: '#cbd5e1' }}>End (HH:MM:SS)</label>
+                  <input 
+                    type="text" 
+                    value={endTime}
+                    onChange={(e) => setEndTime(e.target.value)}
+                    placeholder="optional"
+                    style={{
+                      background: 'var(--glass-bg)',
+                      border: '1px solid var(--glass-border)',
+                      color: 'white',
+                      padding: '0.5rem',
+                      borderRadius: '8px',
+                      outline: 'none',
+                      width: '120px'
+                    }}
+                  />
+                </div>
+              </div>
+              
+              <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem' }}>
+                <button onClick={convertVideo} className="btn btn-primary">
+                  Start Pro Conversion
+                </button>
+                {(startTime || endTime) && (
+                  <button 
+                    onClick={() => { setStartTime(''); setEndTime(''); }} 
+                    className="btn btn-outline"
+                    style={{ fontSize: '0.9rem' }}
+                  >
+                    Clear Trim
+                  </button>
+                )}
+              </div>
             </motion.div>
           )}
 
