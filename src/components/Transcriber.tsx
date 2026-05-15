@@ -13,12 +13,14 @@ export default function Transcriber() {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'processing' | 'done' | 'error'>('idle');
   const [transcript, setTranscript] = useState('');
+  const [liveTranscript, setLiveTranscript] = useState('');
   const [copied, setCopied] = useState(false);
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [progressPhase, setProgressPhase] = useState('');
+  const [startTime, setStartTime] = useState<number | null>(null);
   const ffmpegRef = useRef<FFmpeg | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
-  const [debugLog, setDebugLog] = useState('');
   const [jobId, setJobId] = useState<string | null>(null);
   const jobIdRef = useRef<string | null>(null);
   const [backendMessage, setBackendMessage] = useState('');
@@ -30,12 +32,9 @@ export default function Transcriber() {
     const loadEngines = async () => {
       try {
         const ffmpeg = new FFmpeg();
-        ffmpeg.on('log', ({ message }) => {
-          setDebugLog(message);
-          console.log('[ffmpeg]', message);
-        });
         ffmpeg.on('progress', ({ progress: ratio }) => {
           setProgress(Math.round(ratio * 100));
+          setProgressPhase('Extracting audio...');
         });
 
         const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.10/dist/umd';
@@ -56,12 +55,33 @@ export default function Transcriber() {
     // Initialize Worker for AI
     workerRef.current = new Worker(new URL('../lib/transcription-worker.ts', import.meta.url));
     workerRef.current.onmessage = (e) => {
-      const { status, progress, transcript, error } = e.data;
-      if (status === 'progress') setProgress(progress);
-      if (status === 'loading' || status === 'processing') setStatus(status as any);
+      const { status, progress, transcript, liveText, error } = e.data;
+      
+      if (status === 'progress') {
+        setProgress(progress);
+        setProgressPhase('Transcribing...');
+      }
+      
+      if (status === 'loading') {
+        setStatus('loading');
+        setProgress(0);
+        setProgressPhase('Loading AI model...');
+      }
+      
+      if (status === 'processing') {
+        setStatus('processing');
+        setProgressPhase('Transcribing...');
+      }
+      
+      if (status === 'live_text') {
+        setLiveTranscript(liveText);
+      }
+      
       if (status === 'done') {
         setTranscript(transcript);
+        setLiveTranscript('');
         setStatus('done');
+        setProgress(100);
         if (jobIdRef.current) {
           void updateJob(jobIdRef.current, {
             status: 'done',
@@ -71,13 +91,14 @@ export default function Transcriber() {
           });
         }
       }
+      
       if (status === 'error') {
-        setErrorMessage(error || 'AI processing failed.');
+        setErrorMessage(error || 'Something went wrong during transcription.');
         setStatus('error');
         if (jobIdRef.current) {
           void updateJob(jobIdRef.current, {
             status: 'error',
-            errorMessage: error || 'AI processing failed.',
+            errorMessage: error || 'Transcription failed.',
           }).catch((backendError) => {
             console.warn('Failed to save transcript error job:', backendError);
           });
@@ -97,8 +118,8 @@ export default function Transcriber() {
       setFile(selectedFile);
       setStatus('idle');
       setTranscript('');
+      setLiveTranscript('');
       setErrorMessage('');
-      setDebugLog('');
       setBackendMessage('');
       setJobId(null);
       jobIdRef.current = null;
@@ -129,7 +150,7 @@ export default function Transcriber() {
     setStatus('processing');
     setProgress(0);
     setErrorMessage('');
-    setDebugLog('');
+    setLiveTranscript('');
     let activeJobId = jobId;
     
     const mountPoint = '/input';
@@ -157,7 +178,6 @@ export default function Transcriber() {
 
       const fileSizeGB = file.size / (1024 * 1024 * 1024);
       console.log(`File size: ${fileSizeGB.toFixed(2)} GB`);
-      setDebugLog(`Processing ${inputName} (${fileSizeGB.toFixed(2)} GB)...`);
       
       // Check if file is too large for browser processing
       const maxBrowserSize = 2 * 1024 * 1024 * 1024; // 2GB limit for browser
@@ -169,14 +189,12 @@ export default function Transcriber() {
       
       // For all files, load directly - FFmpeg.js handles the memory
       console.log('Loading file to FFmpeg virtual filesystem...');
-      setDebugLog(`Loading ${inputName} (${(file.size / (1024 * 1024)).toFixed(2)} MB)...`);
       
       try {
         const fileBuffer = await file.arrayBuffer();
         const uint8Array = new Uint8Array(fileBuffer);
         await ffmpeg.writeFile(inputName, uint8Array);
         console.log('File loaded successfully.');
-        setDebugLog(`File loaded successfully.`);
         setProgress(50);
       } catch (loadError) {
         console.error('Failed to load file:', loadError);
@@ -185,7 +203,6 @@ export default function Transcriber() {
       
       // Run FFmpeg conversion
       console.log('Starting FFmpeg audio extraction...');
-      setDebugLog(`Converting audio with FFmpeg...`);
       setProgress(50);
       await ffmpeg.exec([
         '-i',
@@ -208,7 +225,6 @@ export default function Transcriber() {
           console.log(`Reading output file (attempt ${6 - retries}/5)...`);
           data = await ffmpeg.readFile(outputName);
           console.log('Output file read successfully.');
-          setDebugLog(`Output file read successfully (${(data.byteLength / 1024).toFixed(2)} KB)`);
           break;
         } catch (readError) {
           retries--;
@@ -235,7 +251,6 @@ export default function Transcriber() {
 
       // Send to worker for transcription
       console.log('Sending audio to worker for transcription...');
-      setDebugLog(`Sending to AI model for transcription...`);
       setProgress(95);
       workerRef.current.postMessage({ 
         audioURL, 
@@ -246,7 +261,6 @@ export default function Transcriber() {
       console.error('Transcription error:', err);
       const errorMsg = err?.message || String(err) || 'Unknown error';
       setErrorMessage('Audio extraction failed: ' + errorMsg);
-      setDebugLog(`Error: ${errorMsg}`);
       setStatus('error');
       if (activeJobId) {
         try {
@@ -310,23 +324,28 @@ export default function Transcriber() {
   };
 
   return (
-    <div className="card" style={{ maxWidth: '800px', margin: '2rem auto' }}>
-      <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-        <h2 className="gradient-text" style={{ fontSize: '2rem', fontWeight: 700, marginBottom: '0.5rem' }}>
-          Free Local Transcriber
-        </h2>
-        <p style={{ color: '#94a3b8' }}>Pro audio extraction powered by Direct Disk Mounting.</p>
-        {backendMessage && <p style={{ marginTop: '0.75rem', color: '#cbd5e1', fontSize: '0.9rem' }}>{backendMessage}</p>}
+    <div className="card" style={{ maxWidth: '900px', margin: '2rem auto' }}>
+      <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
+        <h1 className="gradient-text" style={{ fontSize: '2.5rem', fontWeight: 800, marginBottom: '0.75rem' }}>
+          Transcribe Your Audio
+        </h1>
+        <p style={{ color: '#cbd5e1', fontSize: '1.1rem', marginBottom: '0.5rem' }}>
+          Convert videos and audio files to text instantly—completely private, runs in your browser
+        </p>
+        {backendMessage && (
+          <p style={{ marginTop: '0.75rem', color: '#10b981', fontSize: '0.95rem', background: 'rgba(16, 185, 129, 0.1)', padding: '0.5rem 1rem', borderRadius: '8px', display: 'inline-block' }}>
+            ✓ {backendMessage}
+          </p>
+        )}
       </div>
 
-              {debugLog && <p style={{ marginTop: '0.5rem', color: '#fecaca', fontSize: '0.85rem', whiteSpace: 'pre-wrap' }}>{debugLog}</p>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
         <div style={{ 
           display: 'flex', 
           alignItems: 'center', 
           gap: '0.75rem', 
           background: 'rgba(14, 165, 233, 0.1)', 
-          padding: '1rem', 
+          padding: '1rem',
           borderRadius: '12px',
           border: '1px solid rgba(14, 165, 233, 0.2)'
         }}>
@@ -383,35 +402,118 @@ export default function Transcriber() {
         )}
 
         {(status === 'loading' || status === 'processing') && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1.25rem', padding: '2rem' }}>
-            <Loader2 className="animate-spin" size={40} color="var(--primary)" />
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            style={{ display: 'flex', flexDirection: 'column', gap: '2rem', padding: '2.5rem 2rem', background: 'rgba(15, 23, 42, 0.5)', borderRadius: '16px', border: '1px solid rgba(148, 163, 184, 0.1)' }}
+          >
             <div style={{ textAlign: 'center' }}>
-              <p style={{ fontWeight: 600 }}>{status === 'loading' ? 'Downloading AI Model...' : 'Processing audio...'}</p>
-              {status === 'loading' && <p style={{ fontSize: '0.8rem', color: '#64748b' }}>{progress}%</p>}
+              <div style={{ marginBottom: '1.5rem' }}>
+                <Loader2 className="animate-spin" size={48} color="var(--primary)" style={{ margin: '0 auto' }} />
+              </div>
+              <h3 style={{ fontSize: '1.3rem', fontWeight: 600, marginBottom: '0.5rem', color: '#e2e8f0' }}>
+                {status === 'loading' ? 'Preparing AI Model' : 'Transcribing Your Audio'}
+              </h3>
+              <p style={{ color: '#94a3b8', marginBottom: '1.5rem' }}>
+                {progressPhase}
+              </p>
+              
+              {/* Progress Bar */}
+              <div style={{ marginBottom: '1.5rem' }}>
+                <div style={{ 
+                  width: '100%', 
+                  height: '8px', 
+                  background: 'rgba(148, 163, 184, 0.1)', 
+                  borderRadius: '10px',
+                  overflow: 'hidden',
+                  marginBottom: '0.75rem'
+                }}>
+                  <motion.div
+                    initial={{ width: 0 }}
+                    animate={{ width: `${progress}%` }}
+                    transition={{ type: 'tween', duration: 0.3 }}
+                    style={{
+                      height: '100%',
+                      background: 'linear-gradient(90deg, var(--primary), #22c55e)',
+                      borderRadius: '10px',
+                    }}
+                  />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <p style={{ color: '#94a3b8', fontSize: '0.9rem' }}>{progress}% complete</p>
+                  <p style={{ color: '#64748b', fontSize: '0.8rem' }}>
+                    {status === 'processing' ? 'This may take a minute...' : 'Loading model...'}
+                  </p>
+                </div>
+              </div>
             </div>
-          </div>
+
+            {/* Live Transcription Text */}
+            {status === 'processing' && liveTranscript && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                style={{
+                  background: 'rgba(20, 184, 166, 0.1)',
+                  border: '1px solid rgba(20, 184, 166, 0.2)',
+                  borderRadius: '12px',
+                  padding: '1.5rem',
+                  maxHeight: '300px',
+                  overflowY: 'auto'
+                }}
+              >
+                <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '0.75rem', fontWeight: 500 }}>LIVE TRANSCRIPTION</p>
+                <p style={{
+                  color: '#e2e8f0',
+                  fontSize: '1rem',
+                  lineHeight: '1.6',
+                  whiteSpace: 'pre-wrap',
+                  fontFamily: 'system-ui, -apple-system, sans-serif'
+                }}>
+                  {liveTranscript}
+                  <span style={{ display: 'inline-block', width: '2px', height: '1.2em', background: 'var(--primary)', marginLeft: '4px', animation: 'blink 1s infinite' }} />
+                </p>
+              </motion.div>
+            )}
+          </motion.div>
         )}
 
         {status === 'done' && (
           <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', padding: '0.5rem' }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h4 style={{ color: '#94a3b8' }}>Result</h4>
-              <div style={{ display: 'flex', gap: '0.5rem', position: 'relative' }}>
-                <button onClick={copyToClipboard} className="btn btn-outline" style={{ padding: '0.5rem' }}>
-                  {copied ? <Check size={18} color="#22c55e" /> : <Copy size={18} />}
+            <div style={{ 
+              background: 'rgba(34, 197, 94, 0.1)',
+              border: '1px solid rgba(34, 197, 94, 0.3)',
+              borderRadius: '12px',
+              padding: '1rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.75rem'
+            }}>
+              <Check size={24} color="#22c55e" />
+              <div>
+                <p style={{ color: '#22c55e', fontWeight: 600, marginBottom: '0.25rem' }}>Transcription Complete!</p>
+                <p style={{ color: '#86efac', fontSize: '0.9rem' }}>Your audio has been successfully converted to text.</p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <h3 style={{ color: '#e2e8f0', fontSize: '1.2rem', fontWeight: 600 }}>Your Transcription</h3>
+              <div style={{ display: 'flex', gap: '0.75rem', position: 'relative' }}>
+                <button onClick={copyToClipboard} className="btn btn-outline" style={{ padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
+                  {copied ? <><Check size={16} color="#22c55e" /> Copied!</> : <><Copy size={16} /> Copy</>}
                 </button>
                 
                 <div style={{ position: 'relative' }}>
                   <button 
                     onClick={() => setShowDownloadMenu(!showDownloadMenu)} 
                     className="btn btn-primary" 
-                    style={{ padding: '0.5rem 1rem', fontSize: '0.9rem' }}
+                    style={{ padding: '0.5rem 1rem', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                   >
-                    <Download size={18} />
+                    <Download size={16} />
                     Download
                     <ChevronDown size={14} />
                   </button>
@@ -502,6 +604,14 @@ export default function Transcriber() {
         .download-option:hover {
           background: rgba(255, 255, 255, 0.05);
           color: var(--primary);
+        }
+        @keyframes blink {
+          0%, 49% {
+            opacity: 1;
+          }
+          50%, 100% {
+            opacity: 0;
+          }
         }
       `}</style>
     </div>
